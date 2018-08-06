@@ -1,0 +1,266 @@
+---
+title: "PML Prediction Assignment"
+author: "Alptekin"
+date: "8/3/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(caret)
+```
+
+## Introduction
+
+The goal of the project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set.
+
+## Loading Data
+
+```{r cars}
+my_train<-read.csv("pml-training.csv",row.names=1)
+
+my_test<-read.csv("pml-testing.csv",row.names=1)
+
+```
+
+## Exploratory analysis
+
+Checking the variables. (I did not run the code here since it is a high-dimensional data)
+
+```{r, eval=FALSE}
+str(my_train)
+
+dim(my_train)
+
+str(my_test)
+
+dim(my_test)
+
+```
+
+Let's check the outcome variables:
+
+```{r }
+
+summary(my_train$classe)
+
+```
+
+It seems the activities are evenly distributed apart from category A.
+
+## Preprocessing
+
+Let's check for variables with zero variance and remove those with zero variance.
+
+```{r }
+
+## position of columns in data frame
+my_zero_columns<-nearZeroVar(my_train)
+
+## summary of zero variance analysis
+my_zero_summary<-nearZeroVar(my_train, saveMetrics = TRUE )
+
+## removal of those columns in both train and test set
+
+my_train<-my_train[,-c(my_zero_columns)]
+
+my_test<-my_test[,-c(my_zero_columns)]
+
+## checking dimensions after removal of columns
+## 60 variables are removed so there should be remainin 99 variales
+
+dim(my_train)
+
+dim(my_test)
+
+
+
+```
+
+Now let'c check for too many NAs in columns:
+
+
+```{r }
+
+library(dplyr)
+
+my_na_sums<- colSums(is.na.data.frame(my_train)) 
+
+## create data frame with number of NA
+my_na_sums<-data.frame(cnames=names(my_na_sums) , values=my_na_sums)
+
+my_na_sums$cnames<-as.character(my_na_sums$cnames)
+
+## select the ones that have NAs more than 90 percent
+## of the training set
+
+my_toomanynas<-filter( my_na_sums , values>  (dim(my_train)[1] * 0.90 ) )$cnames
+
+## remove those column names from both train and test
+## 41 more columns are removed from train and set
+
+my_train<-my_train[,-which(names(my_train)%in%c(my_toomanynas))]
+
+my_test<-my_test[,  -which(names(my_test)%in%c(my_toomanynas))]
+
+
+## check new dimensions
+## 41 columns removed. 58 columns remained
+
+dim(my_train)
+
+dim(my_test) 
+```
+
+And last checking for higly corroleted variables. We should not include factor variables for this analysis.
+Since the data is high-dimensional this kind of control is necessary. It could lead us to reduce the dimension with PCA.
+
+```{r }
+
+# create a correlation matrix
+
+check_cor<- abs(cor(my_train[,-c(1,4,58)]))
+
+diag(check_cor) <- 0
+
+which(check_cor > 0.8,arr.ind=T)
+
+
+## there too many higly corroleated numeric variables
+## apply PCA with preprocess. Threshold variance to 
+## preserve is 95 percent
+
+library(caret)
+
+preProc <- preProcess(my_train[,-c(1,4,58)],method="pca",thresh = 0.95)
+
+## check number of principal components: 26 Principal Components
+
+preProc$numComp
+
+## now 58 variables are reduced to 26
+## so with outcome and two factor variables we have 29 variables.
+
+
+
+
+```
+
+We can exaclty reduce the size of the data with PCA into half (From 58 variables to 29 variables). So let's apply the same preprocessing object into train and test sets
+
+```{r }
+
+## create new train set with preprocess PCA object
+
+my_trainPC <- predict(preProc,my_train)
+
+## create new test set with the very same preproc PCA object
+
+my_testPC <- predict(preProc,my_test)
+
+```
+
+
+## Model Evaluation
+
+So this is a multinomial classification problem. There are multiple classes. Generalized linear model is applicable to binomial classification so is not useful here. 
+
+We should try machine learning algorithms that are accurate in solving multinomial classification problems:
+
+My candidates for this problem after model research (both online and from caret documentation) are:
+
+Multinom, rf, rpart,lda, gbm, svm.
+
+For Random forest and GBM (gradient boosted) my memory limitations did not allow to run those models. I got insufficient memory errors. This is also dues to the size of set is large and still high-dimensional. I add the code here without running again:
+
+```{r, eval=FALSE }
+
+modFitrf <- train(classe ~ .,data=my_train,
+                method="rf")
+
+modFitgbm <- train(classe ~ .,data=my_trainPC,
+                     method="gbm")
+
+
+```
+
+For lda the accuracy was not enough: %75
+
+```{r, warning=FALSE}
+
+
+modFitlda <- train(classe ~ .,data=my_trainPC,
+                  method="lda")
+
+
+confusionMatrix( predict(modFitlda,my_trainPC), my_trainPC$classe )
+
+
+```
+
+
+With rpart again accuracy was low: Accuracy : 0.6718
+
+```{r, warning=FALSE}
+
+
+modFitrpart <- train(classe ~ .,data=my_trainPC,
+                method="rpart")
+
+
+confusionMatrix( predict(modFitrpart,my_trainPC), my_trainPC$classe )
+
+
+```
+
+With multinom accuracy was low. This one took around 10 minutes to finish I do not run it here:
+
+```{r, eval=FALSE, warning=FALSE}
+
+
+library(nnet)
+
+modFitmno <- train(classe ~ .,data=my_trainPC,
+                method="multinom")
+
+confusionMatrix( predict(modFitmno,my_trainPC), my_trainPC$classe )
+
+
+
+```
+
+
+Finally... Support Vector Machines were highly recommended for multinomial classification problems. So it was really higly successfull with %93 percent accuracy in the train set and it got 1 error out of 20 classes in the test set. This one again took around 10 minutes to run with my RStudio on Amazon EC2 MicroMachine which has 1gb ram.
+
+Also when I use SVM with the train set where there is no PCA applied I got %100 accuracy on the test set. So applying PCA and then running SVM reduced accuracy (out of sample) from %100 to %95.
+
+SVM model was really succesful even without any parameter tuning.
+
+Here I load the presaved model which I had saved earlier.
+
+```{r,  eval=FALSE,warning=FALSE}
+
+
+library(kernlab)
+
+library("e1071")
+
+#  it takes around 10 minutes in my machine
+# modFitmsvmpc <- train(classe ~ .,data=my_trainPC,
+#                     method="svmRadialWeights")
+
+# I load the model that I had saved earlier:
+setwd("~/coursera_machine_learning")
+modFitmsvmpc<-readRDS("modFitmsvmpc.rds")
+confusionMatrix( predict(modFitmsvm,my_trainPC), my_trainPC$classe )
+
+# And predict the test set
+predict(modFitmsvmpc,my_testPC)
+
+# [1] B A C A A E D B A A B C B A E E A B B B
+
+```
+
+
